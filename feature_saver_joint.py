@@ -9,7 +9,7 @@ from torch import from_numpy, tensor
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 import time
-from timm.models.efficientnet import efficientnet_b3  # timm library
+from ..timm.models.efficientnet import efficientnet_b3  # timm library
 
 model_name = 'joint_supervised_moco_b3'
 address_of_trained_model_0 = '/scratch/trained_efficientnet_b3_fp16_imagenet.pth.tar'
@@ -31,7 +31,7 @@ torch.manual_seed(2)
 class known_train_data_class(Dataset):
 
   def __init__(self, transform_supervised, transform_moco):
-    with open('./data/imagenet_1000_train.csv') as f:
+    with open('../data/imagenet_1000_train.csv') as f:
       self.samples = [line.rstrip() for line in f if line is not '']
     self.transform_supervised = transform_supervised
     self.transform_moco = transform_moco
@@ -55,7 +55,7 @@ class known_train_data_class(Dataset):
 class known_val_data_class(Dataset):
 
   def __init__(self, transform_supervised, transform_moco):
-    with open('./data/imagenet_1000_val.csv') as f:
+    with open('../data/imagenet_1000_val.csv') as f:
       self.samples = [line.rstrip() for line in f if line is not '']
     self.transform_supervised = transform_supervised
     self.transform_moco = transform_moco
@@ -79,7 +79,7 @@ class known_val_data_class(Dataset):
 class unknown_train_data_class(Dataset):
 
   def __init__(self, transform_supervised, transform_moco):
-    with open('./data/imagenet_166.csv') as f:
+    with open('../data/imagenet_166.csv') as f:
       self.samples = [line.rstrip() for line in f if line is not '']
     self.transform_supervised = transform_supervised
     self.transform_moco = transform_moco
