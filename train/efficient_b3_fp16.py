@@ -9,7 +9,7 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 import time
 
-from timm.models.efficientnet import efficientnet_b3  # timm library
+from ..timm.models.efficientnet import efficientnet_b3  # timm library
 from torch.cuda.amp import autocast, GradScaler
 
 n_cpu = 32
@@ -84,7 +84,7 @@ def accuracy(output, target, topk=(1,)):
 class known_train_data_class(Dataset):
 
   def __init__(self, transform=None):
-    with open('./data/imagenet_1000_train.csv') as f:
+    with open('../data/imagenet_1000_train.csv') as f:
       self.samples = [line.rstrip() for line in f if line is not '']
     self.transform = transform
 
@@ -105,7 +105,7 @@ class known_train_data_class(Dataset):
 class known_val_data_class(Dataset):
 
   def __init__(self, transform=None):
-    with open('./data/imagenet_1000_val.csv') as f:
+    with open('../data/imagenet_1000_val.csv') as f:
       self.samples = [line.rstrip() for line in f if line is not '']
     self.transform = transform
 
