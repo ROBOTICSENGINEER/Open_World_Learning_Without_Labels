@@ -14,10 +14,10 @@ number_of_batch = 50
 
 csv_root = input("Enter address of csv (input) to process : \n") 
 
-with open('./preparing/folder_to_id_dict_known.json', 'r') as f:
+with open('../data/folder_to_id_dict_known.json', 'r') as f:
   folder_to_id_dict_known = json.load(f)
   
-with open('./preparing/folder_to_id_dict_unknown_166.json', 'r') as f:
+with open('../data/folder_to_id_dict_unknown_166.json', 'r') as f:
   folder_to_id_dict_unknown = json.load(f)
 
 
