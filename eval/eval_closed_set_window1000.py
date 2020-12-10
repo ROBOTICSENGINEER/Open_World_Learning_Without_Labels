@@ -25,10 +25,10 @@ if csv_root[-1] != '/':
 
 print(" ")
 
-with open('./data/folder_to_id_dict_known.json', 'r') as f:
+with open('../data/folder_to_id_dict_known.json', 'r') as f:
   folder_to_id_dict_known = json.load(f)
   
-with open('./data/folder_to_id_dict_unknown_166.json', 'r') as f:
+with open('../data/folder_to_id_dict_unknown_166.json', 'r') as f:
   folder_to_id_dict_unknown = json.load(f)
 
 
