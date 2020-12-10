@@ -20,7 +20,7 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
 
-from timm.models.efficientnet import efficientnet_b3  # timm library
+from ..timm.models.efficientnet import efficientnet_b3  # timm library
 
 
 import moco.loader
