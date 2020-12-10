@@ -1,5 +1,5 @@
 import numpy as np
-import MultipleEVM
+import ..MultipleEVM
 import h5py
 import torch
 import time
@@ -25,25 +25,25 @@ print("\n\n\nyou have entered ", a)
 
 if a == '1':
   print("FV = [ supervised ]")
-  output_path = f"/scratch/mjafarzadeh/EVM_{distance_function}_model_imagenet_b3_supervised_tail{tailsize}_ct{100*cover_threshold}_dm{100*distance_multiplier}.hdf5"
+  output_path = f"/scratch/EVM_{distance_function}_model_imagenet_b3_supervised_tail{tailsize}_ct{100*cover_threshold}_dm{100*distance_multiplier}.hdf5"
 elif a == '2':
   print("FV = [ moco imagenet ]")
-  output_path = f"/scratch/mjafarzadeh/EVM_{distance_function}_model_imagenet_b3_mocoImagenet_tail{tailsize}_ct{100*cover_threshold}_dm{100*distance_multiplier}.hdf5"
+  output_path = f"/scratch/EVM_{distance_function}_model_imagenet_b3_mocoImagenet_tail{tailsize}_ct{100*cover_threshold}_dm{100*distance_multiplier}.hdf5"
 elif a == '3':
   print("FV = [ moco places2 ]")
-  output_path = f"/scratch/mjafarzadeh/EVM_{distance_function}_model_imagenet_b3_mocoPlaces_tail{tailsize}_ct{100*cover_threshold}_dm{100*distance_multiplier}.hdf5"
+  output_path = f"/scratch/EVM_{distance_function}_model_imagenet_b3_mocoPlaces_tail{tailsize}_ct{100*cover_threshold}_dm{100*distance_multiplier}.hdf5"
 elif a == '4':
   print("FV = [ moco imagenet + moco places2 ]")
-  output_path = f"/scratch/mjafarzadeh/EVM_{distance_function}_model_imagenet_b3_mocoImagenetPlaces2_tail{tailsize}_ct{100*cover_threshold}_dm{100*distance_multiplier}.hdf5"
+  output_path = f"/scratch/EVM_{distance_function}_model_imagenet_b3_mocoImagenetPlaces2_tail{tailsize}_ct{100*cover_threshold}_dm{100*distance_multiplier}.hdf5"
 elif a == '5':
   print("FV = [ supervised , moco imagenet ]")
-  output_path = f"/scratch/mjafarzadeh/EVM_{distance_function}_model_imagenet_b3_joint_supervised_mocoImagenet_tail{tailsize}_ct{100*cover_threshold}_dm{100*distance_multiplier}.hdf5"
+  output_path = f"/scratch/EVM_{distance_function}_model_imagenet_b3_joint_supervised_mocoImagenet_tail{tailsize}_ct{100*cover_threshold}_dm{100*distance_multiplier}.hdf5"
 elif a == '6':
   print("FV = [ supervised ,  moco places2 ]")
-  output_path = f"/scratch/mjafarzadeh/EVM_{distance_function}_model_imagenet_b3_joint_supervised_mocoPlaces2_tail{tailsize}_ct{100*cover_threshold}_dm{100*distance_multiplier}.hdf5"
+  output_path = f"/scratch/EVM_{distance_function}_model_imagenet_b3_joint_supervised_mocoPlaces2_tail{tailsize}_ct{100*cover_threshold}_dm{100*distance_multiplier}.hdf5"
 elif a == '7':
   print("FV = [ supervised , moco imagenet , moco places2 ]")
-  output_path =   output_path = f"/scratch/mjafarzadeh/EVM_{distance_function}_model_imagenet_b3_joint3_tail{tailsize}_ct{100*cover_threshold}_dm{100*distance_multiplier}.hdf5"
+  output_path =   output_path = f"/scratch/EVM_{distance_function}_model_imagenet_b3_joint3_tail{tailsize}_ct{100*cover_threshold}_dm{100*distance_multiplier}.hdf5"
 else:
   raise ValueError()
   output_path = None
