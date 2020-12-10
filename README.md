@@ -10,6 +10,18 @@ Open-world learning is a problem where an autonomous agent detects things that i
 
 # How to run
 
+### A) Training and saving feature (inside train folder)
+1. Train supervised EfficientNet-B3 on ImageNet 2012  datasetusing `efficient_b3_fp16.py` or `efficient_b3_fp32.py`
+2. Train self-supervised EfficientNet-B3 using MoCo V2 on ImageNet 2012 and Places2 Dataset:  `moco_Imagenet.py` and `moco_places.py`
+3. Extract feautur from EfficientNet-B3 using `feature_saver_joint.py`
+4. Train EVM using `train_evm_cosine.py`
+
+
+### B) Run and evaluate open world learning 
+
+1. run open-world unsupervised learning inside `OWL_without_label`
+2. run open-world unsupervised learning inside `OWL_with_label`
+3. evaluate the resulkt using scripts in `eval`
 
 
 # Non overlapping classes
