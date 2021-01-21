@@ -22,7 +22,7 @@ number_of_tests = 5
 N_CPU = 32
 batch_size = 100
 
-name = "tail33998_ct7_dm045_65"
+name = "supervised_tail33998_ct7_dm045_65"
 
 tests_csv_root = "../data/all_test_166/"
 
@@ -295,7 +295,7 @@ for level in levels:
     owl_alg.set_red_light(0)
     for round_id in range(num_rounds):
       print(f"\n\level {level}, test_id {test_id+1} from {number_of_tests}, red light off,  round_id {round_id+1} from {num_rounds}")
-      round_file_name = model + "temp.csv"
+      round_file_name = name + "temp.csv"
       with open(round_file_name, "w") as f:
         f.writelines("\n".join(image_list[round_id*batch_size : (round_id+1)*batch_size]))
       owl_alg.feature_extraction(dataset_path = round_file_name, dataset_root=None)
