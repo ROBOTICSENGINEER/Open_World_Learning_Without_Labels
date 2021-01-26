@@ -75,7 +75,7 @@ with h5py.File(output_h5, "w") as h5:
       
       if len(all_C)<2500:
         n = 2500 - len(all_C)
-        print(f"Warning: level {level} \ttest_id {test_id} pre \t\tN = {len(all_C)}  < 2500 \tN - 2500 = {n}")
+        print(f"Warning: level {level} \ttest_id {test_id} pre \t\tN = {len(all_C)}  < 2500 \t2500 - N= {n}")
         tmp_C = np.ones(2500) * all_C[0]
         tmp_L = np.ones(2500) * all_L[0]
         tmp_C[n:] = all_C
