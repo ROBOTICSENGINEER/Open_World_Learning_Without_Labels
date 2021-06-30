@@ -1,359 +1,173 @@
-import numpy
-import weibull
 import torch
-import h5py
-import pickle
-import sys
-from gpu_pairwise_distances_torch import gpu_pairwise_distances
-import logging
-import time
-from tqdm import tqdm
-logger = logging.getLogger("EVM")
+import itertools
+import pairwisedistances
+import weibull
+
+def EVM_Params(parser):
+    EVM_params_parser = parser.add_argument_group(title="EVM",description="EVM params")
+    EVM_params_parser.add_argument("--tailsize", nargs="+", type=float, default=[1.0],
+                                   help="tail size to use\ndefault: %(default)s")
+    EVM_params_parser.add_argument("--cover_threshold", nargs="+", type=float, default=[0.7],
+                                   help="cover threshold to use\ndefault: %(default)s")
+    EVM_params_parser.add_argument("--distance_multiplier", nargs="+", type=float, default=[0.55],
+                                   help="distance multiplier to use\ndefault: %(default)s")
+    EVM_params_parser.add_argument('--distance_metric', default='euclidean', type=str, choices=['cosine','euclidean'],
+                                   help='distance metric to use\ndefault: %(default)s')
+    EVM_params_parser.add_argument("--chunk_size", type=int, default=200,
+                                   help="Number of classes per chunk, reduce this parameter if facing OOM "
+                                        "error\ndefault: %(default)s")
+    return parser, dict(group_parser = EVM_params_parser,
+                        param_names = ("tailsize", "distance_multiplier", "cover_threshold"),
+                        param_id_string = "TS_{}_DM_{:.2f}_CT_{:.2f}")
 
 
-class EVM (object):
 
-  """This class represents the Extreme Value Machine.
 
-  The constructor can be called in two different ways:
-
-  1. Creating an empty (untrained) machine by setting the ``tailsize`` to any positive integer.
-     All other parameters can be set as well.
-     Please :py:meth:`train` the machine before using it.
-
-     Example::
-
-       EVM(100, 0.5, distance_function = 'cosine')
-
-  2. Loading a pre-trained machine by providing the filename of -- or the :py:class:`h5py.Group` inside -- the HDF5 file.
-     All other parameters are ignored, as they are read from the file.
-
-     Example::
-
-       h5 = h5py.File("EVM.hdf5", 'r')
-       EVM(h5["/some/group"])
-  """
-
-  def __init__(self,
-    tailsize,
-    cover_threshold = None,
-    distance_multiplier = 0.5,
-    distance_function = 'cosine',
-    log_level = 'info',
-    device = 'cuda'
-  ):
-    self.log_level = log_level
-    if isinstance(tailsize, (str, h5py.Group)):
-      return self.load(tailsize)
-
-    self.device = device
-
-    self.tailsize = tailsize
-    self.cover_threshold = cover_threshold
-    self.distance_function = distance_function.lower()
-    self.distance_multiplier = distance_multiplier
-
-    self._positives = None
-    self._margin_weibulls = None
-    self._extreme_vectors = None
-    self._extreme_vectors_indexes = None
-    self._covered_vectors = None
-    self._label = None
-
-  def _fit_weibull(self, distances, distance_multiplier):
-    """Internal function to do a weibull fitting on distances. Do not call directly."""
-    mr = weibull.weibull()
-    mr.FitLow(distances.double()*distance_multiplier, self.tailsize, 0)
+def fit_low(distances, distance_multiplier, tailsize, gpu):
+    mr = weibull.Weibull()
+    mr.FitLow(distances.double() * distance_multiplier, min(tailsize,distances.shape[1]), isSorted=False, gpu=gpu)
     return mr
 
-  def _distances(self, negatives):
-    """Internal function to compute distances between positives and negatives. Do not call directly."""
-    # compute distances between positives and negatives
-    start_time = time.time()
-    logger.info('Step 1: Computing %d distances between %d positive and %d negative points' % (len(self._positives) * len(negatives), len(self._positives), len(negatives)))
-    distances = gpu_pairwise_distances(self._positives, negatives, self.distance_function, 0)
-    logger.info("--- %s seconds ---" % (time.time() - start_time))
-    return distances
-
-
-  def _positive_distances(self):
-    """Computes the distances between positives. Do not call directly."""
-    start_time = time.time()
-    logger.info("Step 5: Computes the distances between positives")
-    distances = gpu_pairwise_distances(self._positives, self._positives, self.distance_function, 0)
-    logger.info("--- %s seconds ---" % (time.time() - start_time))
-    return distances
-
-
-  def _set_cover(self):
-    """Internal function to deduce the model to keep only the most informant features (the so-called Extreme Vectors). Do not call directly."""
-    N = len(self._positives)
-    
-    logger.info("Step 4: Computing set-cover for %d points" % N)
-    # compute distances between positives, if not given
-    distances = self._positive_distances()
-    
-    start_time = time.time()
-
+def set_cover(mr_model, positive_distances, cover_threshold):
     # compute probabilities
-    probabilities = self._margin_weibulls.wscore(distances)
-    probabilities = probabilities.cuda()
+    probabilities = mr_model.wscore(positive_distances)
 
     # threshold by cover threshold
-    thresholded = probabilities >= self.cover_threshold
-    thresholded[torch.eye(probabilities.shape[0]).type(torch.BoolTensor)] = True
+    e = torch.eye(probabilities.shape[0]).type(torch.BoolTensor)
+    thresholded = probabilities >= cover_threshold
+    thresholded[e] = True
+    del probabilities
 
     # greedily add points that cover most of the others
-    covered = torch.zeros(N).type(torch.bool)
-    _extreme_vectors = []
-    self._covered_vectors = []
+    covered = torch.zeros(thresholded.shape[0]).type(torch.bool)
+    extreme_vectors = []
+    covered_vectors = []
 
-    pbar = tqdm(total=N)
     while not torch.all(covered).item():
-      sorted_indices = torch.topk(torch.sum(thresholded[:,~covered],dim=1), len(_extreme_vectors)+1, sorted=False).indices
-      for indx, sortedInd in enumerate(sorted_indices.tolist()):
-        if sortedInd not in _extreme_vectors:
-          break
-      else:
-        print("ENTERING INFINITE LOOP ... EXITING")
-        break
-      covered_by_current_ev = torch.nonzero(thresholded[sortedInd,:], as_tuple=False)
-      pbar.update(torch.sum(thresholded[sortedInd,~covered]).item())
-      covered[covered_by_current_ev]=True
-      _extreme_vectors.append(sortedInd)
-      self._covered_vectors.append(covered_by_current_ev)
-    pbar.close()
-    logger.debug(_extreme_vectors)
-    self._extreme_vectors_indexes = torch.tensor(_extreme_vectors).to(self.device)
-    params = self._margin_weibulls.return_all_parameters()
-    scale = torch.gather(params['Scale'].to(self.device),0,self._extreme_vectors_indexes)
-    shape = torch.gather(params['Shape'].to(self.device),0,self._extreme_vectors_indexes)
-    smallScore = torch.gather(params['smallScoreTensor'][:,0].to(self.device),0,self._extreme_vectors_indexes)
-    obj = dict(Scale = scale, Shape = shape, signTensor = params['signTensor'], translateAmountTensor = params['translateAmountTensor'], smallScoreTensor = smallScore)
-    self._extreme_vectors = weibull.weibull(obj)
-    self.log("Obtained %d extreme vectors", self._extreme_vectors_indexes.shape[0])
-    logger.info("--- %s seconds ---" % (time.time() - start_time))
+        sorted_indices = torch.topk(torch.sum(thresholded[:, ~covered], dim=1),
+                                    len(extreme_vectors)+1,
+                                    sorted=False,
+                                    ).indices
+        for indx, sortedInd in enumerate(sorted_indices.tolist()):
+            if sortedInd not in extreme_vectors:
+                break
+        else:
+            print(thresholded.device,"ENTERING INFINITE LOOP ... EXITING")
+            break
+        covered_by_current_ev = torch.nonzero(thresholded[sortedInd, :], as_tuple=False)
+        covered[covered_by_current_ev] = True
+        extreme_vectors.append(sortedInd)
+        covered_vectors.append(covered_by_current_ev.to("cpu"))
+    del covered
+    extreme_vectors_indexes = torch.tensor(extreme_vectors)
+    params = mr_model.return_all_parameters()
+    scale = torch.gather(params["Scale"].to("cpu"), 0, extreme_vectors_indexes)
+    shape = torch.gather(params["Shape"].to("cpu"), 0, extreme_vectors_indexes)
+    smallScore = torch.gather(
+        params["smallScoreTensor"][:, 0].to("cpu"), 0, extreme_vectors_indexes
+    )
+    extreme_vectors_models = weibull.Weibull(dict(Scale=scale,
+                                                  Shape=shape,
+                                                  signTensor=params["signTensor"],
+                                                  translateAmountTensor=params["translateAmountTensor"],
+                                                  smallScoreTensor=smallScore))
+    del params
+    return (extreme_vectors_models, extreme_vectors_indexes, covered_vectors)
+
+def EVM_Training(pos_classes_to_process, features_all_classes, args, gpu, models=None):
+    # TODO: Convert args.chunk_size from number of classes per batch to number of samples per batch.
+    # This would be useful for handeling highly unbalanced number of samples per class.
+    negative_classes_for_current_batch = []
+    no_of_negative_classes_for_current_batch = 0
+    temp = []
+    for cls_name in set(features_all_classes.keys()) - set(pos_classes_to_process):
+        no_of_negative_classes_for_current_batch+=1
+        temp.append(features_all_classes[cls_name])
+        if len(temp) == args.chunk_size:
+            negative_classes_for_current_batch.append(torch.cat(temp))
+            temp = []
+    if len(temp) > 0:
+        negative_classes_for_current_batch.append(torch.cat(temp))
+    for pos_cls_name in pos_classes_to_process:
+        # Find positive class features
+        positive_cls_feature = features_all_classes[pos_cls_name].to(f"cuda:{gpu}")
+        tailsize = max(args.tailsize)
+        if tailsize<=1:
+            tailsize = tailsize*positive_cls_feature.shape[0]
+        tailsize=int(tailsize)
+
+        negative_classes_for_current_class=[]
+        temp = []
+        neg_cls_current_batch=0
+        for cls_name in set(pos_classes_to_process)-{pos_cls_name}:
+            neg_cls_current_batch+=1
+            temp.append(features_all_classes[cls_name])
+            if len(temp) == args.chunk_size:
+                negative_classes_for_current_class.append(torch.cat(temp))
+                temp = []
+        if len(temp)>0:
+            negative_classes_for_current_class.append(torch.cat(temp))
+        negative_classes_for_current_class.extend(negative_classes_for_current_batch)
+
+        assert len(negative_classes_for_current_class)>=1, \
+            "In order to train the EVM you need atleast one negative sample for each positive class"
+        bottom_k_distances = []
+        negative_distances=[]
+        for batch_no, neg_features in enumerate(negative_classes_for_current_class):
+            assert positive_cls_feature.shape[0] != 0 and neg_features.shape[0] != 0, \
+                f"Empty tensor encountered positive_cls_feature {positive_cls_feature.shape}" \
+                f"neg_features {neg_features.shape}"
+            distances = pairwisedistances.__dict__[args.distance_metric](positive_cls_feature,
+                                                                         neg_features.to(f"cuda:{gpu}"))
+            bottom_k_distances.append(distances.cpu())
+            bottom_k_distances = torch.cat(bottom_k_distances, dim=1)
+            # Store bottom k distances from each batch to the cpu
+            bottom_k_distances = [torch.topk(bottom_k_distances,
+                                             min(tailsize,bottom_k_distances.shape[1]),
+                                             dim = 1,
+                                             largest = False,
+                                             sorted = True).values]
+            del distances
+        bottom_k_distances = bottom_k_distances[0].to(f"cuda:{gpu}")
+
+        # Find distances to other samples of same class
+        positive_distances = pairwisedistances.__dict__[args.distance_metric](positive_cls_feature, positive_cls_feature)
+        # check if distances to self is zero
+        e = torch.eye(positive_distances.shape[0]).type(torch.BoolTensor)
+        assert torch.allclose(positive_distances[e].type(torch.FloatTensor), \
+                              torch.zeros(positive_distances.shape[0]),atol=1e-06) == True, \
+            "Distances of samples to themselves is not zero"
+
+        for distance_multiplier, cover_threshold, org_tailsize in itertools.product(args.distance_multiplier,
+                                                                                args.cover_threshold, args.tailsize):
+            if org_tailsize <= 1:
+                tailsize = int(org_tailsize * positive_cls_feature.shape[0])
+            else:
+                tailsize = int(org_tailsize)
+            # Perform actual EVM training
+            weibull_model = fit_low(bottom_k_distances, distance_multiplier, tailsize, gpu)
+            extreme_vectors_models, extreme_vectors_indexes, covered_vectors = set_cover(weibull_model,
+                                                                                         positive_distances.to(f"cuda:{gpu}"),
+                                                                                         cover_threshold)
+            extreme_vectors = torch.gather(positive_cls_feature, 0,
+                                           extreme_vectors_indexes[:,None].to(f"cuda:{gpu}").repeat(1,positive_cls_feature.shape[1]))
+            extreme_vectors_models.tocpu()
+            extreme_vectors = extreme_vectors.cpu()
+            yield (f"TS_{org_tailsize}_DM_{distance_multiplier:.2f}_CT_{cover_threshold:.2f}",
+                   (pos_cls_name,dict(extreme_vectors = extreme_vectors,
+                                      extreme_vectors_indexes=extreme_vectors_indexes,
+                                      weibulls = extreme_vectors_models)))
 
 
-  def train(self, positives, negatives=None, label=None):
-    """Trains the extreme value machine using the given positive samples of the class, and the negative samples that do not belong to the class.
-
-    Parameters
-    ----------
-    
-    positives : torch.Tensor
-      The points of the class to model.
-
-    negatives : torch.Tensor or ``None``
-      Points of other classes, used to compute the distribution model.
-      Ignored when ``distances`` are not ``None``.
-
-    distances : torch.Tensor or ``None``
-      Distances between positives and negatives, used to compute the distribution model.
-      If no distances are given, they are computed from the ``negatives``.
-      A different number of distances can be provided for each of the ``positives``.
-
-    """
-
-    assert negatives is not None, "Negatives must not be `None`"
-
-    # store all positives and their according Weibull distributions as the model
-    self._positives = positives
-
-    # if given, store label to the model
-    if label is not None:
-      self._label = str(label)
-    else:
-      self._label = None
-
-    # now, train the margin probability
-    # first, train the weibull models for each positive point
-    distances = self._distances(negatives)
-
-    # compute weibulls from distances
-    logger.info("Step 2: Compute weibulls from distances, Tailsize: %d " % (self.tailsize))
-    self._margin_weibulls = self._fit_weibull(distances,self.distance_multiplier)
-
-    # then, perform model reduction using set-cover
-    logger.info("Step 3: Perform model reduction using set-cover")
-    self._set_cover()
-
-
-  def probabilities(self, points):
-    """Computes the probabilities for all extreme vectors for the given points.
-
-    Parameters
-    ----------
-
-    points: torch.Tensor
-      The points, for which to compute the probability.
-      Each element in the Tensor contains the feature of one point, and overall size `[number_of_features, feature_dimension]`.
-      The `feature_dimension` across all features must be identical
-
-    Returns
-    -------
-
-    2D :py:class:`numpy.ndarray` of floats
-      The probability of inclusion for each of the points to each of the extreme vectors.
-      The array indices are in order `(point, extreme_vector)`.
-    """
-    assert points is not None, "points must not be `None`"
-    new = [self._positives[e] for e in numpy.array(self._extreme_vectors_indexes.cpu())]
-    logger.info("Step 1: Compute distances on GPU")
-    distances = gpu_pairwise_distances(torch.stack(new), points, self.distance_function, 0)
-    logger.info("Size of distances list: %d " % (sys.getsizeof(distances)))
-    logger.info("Step 2: Compute weibull scores on GPU")
-    w_scores = self._extreme_vectors.wscore(torch.transpose(distances,1,0))
-    logger.info("Size of weibull scores: %d " % (sys.getsizeof(w_scores)))
-    # finally, return the scores in corrected order
-    return numpy.array(w_scores.cpu())
-    
-
-  def max_probabilities(self, points = None, distances = None, probabilities = None):
-    """Computes the maximum probabilities and their accoring exteme vector for the points.
-
-    Parameters
-    ----------
-
-    points: torch.Tensor
-      The points, for which to compute the probability. Can be omitted when the ``probabilities`` parameter is given.
-      Each element in the Tensor contains the feature of one point, and overall size `[number_of_features, feature_dimension]`.
-      The `feature_dimension` across all features must be identical.
-
-    distances: torch.Tensor or ``None``
-      The distances between points and the :py:attr:`extreme_vectors`, for which to compute the probabilities.
-      Distances should be computed with the same distance function as used during training.
-      Ignored when ``probabilities`` are given.
-
-    probabilities : 2D :py:class:`numpy.ndarray` of floats or ``None``
-      The probabilities that were returned by the :py:meth:`probabilities` function.
-      If not given, they are first computed from the given ``points`` or ``distances``.
-
-
-    Returns
-    -------
-
-    [float]
-      The maximum probability of inclusion for each of the points.
-
-    [int]
-      The list of indices into `:py:attr:`extreme_vectors` for the given points.
-    """
-
-    if probabilities is None: probabilities = self.probabilities(points, distances)
-    indices = numpy.argmax(probabilities, axis=1)
-    return [probabilities[i, j] for i,j in enumerate(indices)], indices
-
-
-  def save(self, h5):
-    """Saves this object to HDF5
-
-    Parameters
-    ----------
-
-    h5 : ``str`` or :py:class:`h5py.File` or :py:class:`h5py.Group`
-      The name of the file to save, or the (subgroup of the) HDF5 file opened for writing.
-    """
-    if self._positives is None:
-      raise RuntimeError("The model has not been trained yet")
-    # open file for writing; create if not existent
-    if isinstance(h5, str):
-      h5 = h5py.File(h5, 'w')
-    # write features
-    h5["Features"] = self._positives
-    
-    # write extreme vectors
-    params = self._extreme_vectors.return_all_parameters()
-    e = h5.create_group('ExtremeVectors')
-    e.create_dataset('scale',data=params['Scale'].cpu())
-    e.create_dataset('shape',data=params['Shape'].cpu())
-    e.create_dataset('sign',data=params['signTensor'])
-    e.create_dataset('translateAmount',data=params['translateAmountTensor'])
-    e.create_dataset('smallScore',data=params['smallScoreTensor'].cpu())
-    
-    e.create_dataset('indexes',data = self._extreme_vectors_indexes.cpu())
-    
-    # write covered vectors
-    for i in range(len(self._extreme_vectors_indexes)):
-      e.create_dataset('CoveredVectors/'+str(i),data=self._covered_vectors[i].cpu().numpy())
-    
-    # write other parameteres (as attributes)
-    e.attrs["Distance"] = numpy.string_(self.distance_function)
-    e.attrs["Tailsize"] = self.tailsize
-    e.attrs["Label"] = self._label if self._label is not None else -1
-    h5["ExtremeVectors"].attrs["CoverThreshold"] = self.cover_threshold if self.cover_threshold is not None else -1.
-
-
-  def load(self, h5):
-    """Loads this object from HDF5.
-
-    Parameters
-    ----------
-
-    h5 : ``str`` or :py:class:`h5py.File` or :py:class:`h5py.Group`
-      The name of the file to load, or the (subgroup of the) HDF5 file opened for reading.
-    """
-    # open file for reading
-    if isinstance(h5, str):
-      h5 = h5py.File(h5, 'r')
-    
-    # load features
-    self._positives = torch.from_numpy(h5["Features"][:])
-    
-    # load extreme vectors
-    e = h5['ExtremeVectors']
-    obj = dict(Scale=torch.from_numpy(e['scale'][()]),Shape = torch.from_numpy(e['shape'][()]),signTensor = torch.tensor(e['sign'][()]),translateAmountTensor = torch.LongTensor(e['translateAmount'][()]),smallScoreTensor = torch.from_numpy(e['smallScore'][()]))
-    self._extreme_vectors = weibull.weibull(obj)
-    self._extreme_vectors_indexes = torch.tensor(e['indexes'][()])
-
-    cv = []
-    # load covered indices
-    for i in range(len(self._extreme_vectors_indexes)):
-      cv.append(torch.from_numpy(numpy.array(e['CoveredVectors/'+str(i)][()])))
-    self._covered_vectors = cv
-    
-    # load other parameteres
-    self.distance_function = e.attrs["Distance"]
-    self.tailsize = e.attrs["Tailsize"]
-    self._label = e.attrs["Label"]
-    if self._label == -1: self._label = None
-    self.cover_threshold = e.attrs["CoverThreshold"]
-    if self.cover_threshold == -1.: self.cover_threshold = None
-  
-    
-  def log(self, *args, **kwargs):
-    """Logs the given message using debug or info logging, see :py:attr:`log_level`"""
-    {'info' : logger.info, 'debug' : logger.debug}[self.log_level](*args, **kwargs)
-
-
-  @property
-  def size(self):
-    """The number of extreme vectors."""
-    if self._extreme_vectors_indexes is not None:
-      return self._extreme_vectors_indexes.shape[0]
-    else:
-      return 0
-
-  @property
-  def shape(self):
-    """The shape of the features that the :py:meth:`probability` function expects."""
-    if self._positives is not None:
-      return self._positives[0].shape
-
-  @property
-  def extreme_vectors(self):
-    """The extreme vectors that this class stores."""
-    if self._extreme_vectors is not None:
-      return self._positives[self._extreme_vectors_indexes]
-
-  @property
-  def label(self):
-    """The label that this class stores."""
-    if self._label is not None:
-      return self._label
-
-  def covered(self, i):
-    """Returns the vectors covered by the extreme vector with the given index"""
-    if self._extreme_vectors is not None and i < self.size:
-      return [self._positives[c] for c in self._covered_vectors[i]]
-
+def EVM_Inference(pos_classes_to_process, features_all_classes, args, gpu, models=None):
+    for pos_cls_name in pos_classes_to_process:
+        test_cls_feature = features_all_classes[pos_cls_name].to(f"cuda:{gpu}")
+        assert test_cls_feature.shape[0]!=0
+        probs=[]
+        for cls_no, cls_name in enumerate(sorted(models.keys())):
+            distances = pairwisedistances.__dict__[args.distance_metric](test_cls_feature,
+                                                                         models[cls_name]['extreme_vectors'].to(f"cuda:{gpu}"))
+            probs_current_class = models[cls_name]['weibulls'].wscore(distances)
+            probs.append(torch.max(probs_current_class, dim=1).values)
+        probs = torch.stack(probs,dim=-1).cpu()
+        yield ("probs", (pos_cls_name, probs))
