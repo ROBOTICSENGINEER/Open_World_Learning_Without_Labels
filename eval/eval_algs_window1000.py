@@ -1,195 +1,94 @@
-import os
-import json
 import time
+import os
 import numpy as np
 import pandas as pd
-import h5py
+import json
 from B3 import calc_b3
+import argparse
 
 
-levels = ['u10', 'u25', 'u50', 'u100']
+parser = argparse.ArgumentParser(description='Evaluation of Open World Learning')
+parser.add_argument('--input_csv', required=True, help='Path to csv result to evaluate it.')
+parser.add_argument('--output_txt', required=True, help='txt file name to save the result.')
+args_eval = parser.parse_args()
 
-Number_of_tests = 5
-number_of_batch = 50
-N = 1000
-number_of_window = len(range(0,5001-N, 100))
-
-
-csv_root = input("Enter address of csv (input) to process : \n") 
-output_h5 = input("Enter output file name (*.hdf5) : \n") 
-
-if csv_root[-1] != '/':
-  csv_root = csv_root + '/'
+assert os.path.isfile(args_eval.input_csv) 
 
 
-print(" ")
+csv_path = args_eval.input_csv
+output_txt = args_eval.output_txt
 
-with open('../data/folder_to_id_dict_known.json', 'r') as f:
-  folder_to_id_dict_known = json.load(f)
+
+folder_to_number_dict = json.load(open("./data/folder_to_id_dict_all.json"))
+
+
+
+def get_label(x):
+  z_train = max(x.find('v2_73/') ,  x.find('train/'))
+  z_val = x.find('val_in_folders/')
   
-with open('../data/folder_to_id_dict_unknown_166.json', 'r') as f:
-  folder_to_id_dict_unknown = json.load(f)
+  if z_train>=0:
+    ind = int(   folder_to_number_dict [     x[(z_train+6):(z_train+15)]   ]  )
+  elif z_val>=0:
+    ind = int(   folder_to_number_dict [     x[(z_val+15):(z_val+24)]   ]  )
+  else:
+    raise ValueError(f"x is not in folder_to_number_dict")
+  return ind
 
 
-def label_finder(id):
-  y = np.zeros(len(id))
-  for (k,x) in enumerate(id):
-    z = x.find('/n')
-    if x.find('ILSVRC_2012')>0:
-      folder_name = x[(z+1):(z+10)]
-      y[k] = folder_to_id_dict_known[folder_name]
-    elif x.find('ILSVRC_2010')>0:
-      folder_name = x[(z+1):(z+10)]
-      y[k] = folder_to_id_dict_unknown[folder_name]
-    else:
-      raise ValueError()
-  return y
+df = pd.read_csv(csv_path, header=None, index_col=False)
+id = df.iloc[:,0]
+p = df.iloc[:,1:].values
+y = np.argmax(p, axis=1)
 
 
-with h5py.File(output_h5, "w") as h5:
-  for level in levels:
-    for test_id in range(Number_of_tests): 
-      
-      
-      
-      score_post  = np.zeros(number_of_window)
-      score_pre = np.zeros(number_of_window)
-  
-      all_L = np.array([])
-      all_C = np.array([])
-  
-      csv_files_path = csv_root + "characterization_" + level + "_"  + str(test_id) + "_"
-      charcterization_csv_fils_pre  = [csv_files_path  + "pre_"  + str(k).zfill(2) + ".csv" for k in range(number_of_batch)]
-  
-      for index,csv_file in enumerate(charcterization_csv_fils_pre):
-        df = pd.read_csv(csv_file, sep=',',header=None, index_col=False)
-        id = df.iloc[:,0]
-        c = df.values[:,1:]
-        L = label_finder(id)
-        C = np.argmax(c, axis =1)
-        all_L = np.append(all_L, L)
-        all_C = np.append(all_C, C)
-      if len(all_C)<5000:
-        n = 5000 - len(all_C)
-        print(f"Warning: level {level} \ttest_id {test_id} pre \t\tN = {len(all_C)}  < 5000 \t5000 - N = {n}")
-        tmp_C = np.ones(5000) * all_C[0]
-        tmp_L = np.ones(5000) * all_L[0]
-        tmp_C[n:] = all_C
-        tmp_L[n:] = all_L
-        all_C = np.copy(tmp_C)
-        all_L = np.copy(tmp_L)  
-        
-        
-  
-      i = -1
-      for k in range(0,5001-N, 100):
-        i = i + 1
-        n1 = k 
-        n2 = k + N
-        window_L = all_L[n1:n2]
-        window_C = all_C[n1:n2]
-        
-        
-        is_known_window = (window_L>0) * (window_L<1001)
-        is_unknown_window = ~is_known_window
-        predicted_known_window = (window_C>0) * (window_C<1001)
-        predicted_unknown_window = ~predicted_known_window
-        
-      
-        N_KK =  np.sum(is_known_window*predicted_known_window)
-        N_KU =  np.sum(is_known_window*predicted_unknown_window)
-        N_UK =  np.sum(is_unknown_window*predicted_known_window)
-        N_UU =  np.sum(is_unknown_window*predicted_unknown_window)
-      
-        N_window = N_KK + N_KU + N_UK + N_UU
-        assert N_window == N
-      
-        window_y = window_L[is_known_window*predicted_known_window]
-        window_k = window_C[is_known_window*predicted_known_window]
-        window_LUU = window_L[is_unknown_window*predicted_unknown_window]
-        window_CUU = window_C[is_unknown_window*predicted_unknown_window]
-      
-        if N_KK > 0:
-          correct_window = np.sum(window_y==window_k)
-        else:
-          correct_window = 0
-        if N_UU > 0:
-          b3_window, _, _ = calc_b3(L = window_LUU , K = window_CUU)
-        else:
-          b3_window = 0 
-        
-        score_pre[i] = ( correct_window +  ( b3_window * N_UU ) ) /  N
-      
-      
-      all_L = np.array([])
-      all_C = np.array([])
-  
-      csv_files_path = csv_root + "characterization_" + level + "_"  + str(test_id) + "_"
-      charcterization_csv_fils_post  = [csv_files_path  + "post_"  + str(k).zfill(2) + ".csv" for k in range(number_of_batch)]
-  
-      for index,csv_file in enumerate(charcterization_csv_fils_post):
-        df = pd.read_csv(csv_file, sep=',',header=None, index_col=False)
-        id = df.iloc[:,0]
-        c = df.values[:,1:]
-        L = label_finder(id)
-        C = np.argmax(c, axis =1)
-        all_L = np.append(all_L, L)
-        all_C = np.append(all_C, C)
-      if len(all_C)<5000:
-        n = 5000 - len(all_C)
-        print(f"Warning: level {level} \ttest_id {test_id} post \t\tN = {len(all_C)}  < 5000 \tN - 5000 = {n}")
-        tmp_C = np.ones(5000) * all_C[0]
-        tmp_L = np.ones(5000) * all_L[0]
-        tmp_C[n:] = all_C
-        tmp_L[n:] = all_L
-        all_C = np.copy(tmp_C)
-        all_L = np.copy(tmp_L)  
+L = np.array([get_label(id[k]) for k in range(5000)])
 
+
+scores = np.zeros(41)
+
+for k in range(41):
+  n1 = k * 100
+  n2 = n1 + 1000
   
-      i = -1
-      for k in range(0,5001-N, 100):
-        i = i + 1
-        n1 = k 
-        n2 = k + N
-        window_L = all_L[n1:n2]
-        window_C = all_C[n1:n2]
-        
-        
-        is_known_window = (window_L>0) * (window_L<1001)
-        is_unknown_window = ~is_known_window
-        predicted_known_window = (window_C>0) * (window_C<1001)
-        predicted_unknown_window = ~predicted_known_window
-        
-      
-        N_KK =  np.sum(is_known_window*predicted_known_window)
-        N_KU =  np.sum(is_known_window*predicted_unknown_window)
-        N_UK =  np.sum(is_unknown_window*predicted_known_window)
-        N_UU =  np.sum(is_unknown_window*predicted_unknown_window)
-      
-        N_window = N_KK + N_KU + N_UK + N_UU
-        assert N_window == N
-      
-        window_y = window_L[is_known_window*predicted_known_window]
-        window_k = window_C[is_known_window*predicted_known_window]
-        window_LUU = window_L[is_unknown_window*predicted_unknown_window]
-        window_CUU = window_C[is_unknown_window*predicted_unknown_window]
-      
-        if N_KK > 0:
-          correct_window = np.sum(window_y==window_k)
-        else:
-          correct_window = 0
-        if N_UU > 0:
-          b3_window, _, _ = calc_b3(L = window_LUU , K = window_CUU)
-        else:
-          b3_window = 0 
-        
-        score_post[i] = ( correct_window +  ( b3_window * N_UU ) ) /  N
-        
-      score_diff = score_post - score_pre
-      
-      h5.create_dataset(f'{level}/{test_id}/score_pre', data = score_pre , dtype=np.float64)
-      h5.create_dataset(f'{level}/{test_id}/score_post', data = score_post , dtype=np.float64)
-      h5.create_dataset(f'{level}/{test_id}/score_diff', data = score_diff , dtype=np.float64)
-        
-        
-        
+  
+  predicted = y[n1:n2]
+  Labels = L[n1:n2]
+
+  is_known = (Labels < 1001)
+  is_unknown = (Labels >= 1001)
+  n_known = np.sum(is_known)
+  n_unknown = np.sum(is_unknown)
+  
+  #print([k, n1, n2, n_known, n_unknown, n_known + n_unknown ])
+
+  if n_known == 0:
+    f_measure, precision, recall = calc_b3(L = Labels , K = predicted)
+    scores[k] = f_measure
+  elif n_unknown == 0:
+    acc = np.sum( Labels == predicted ) / 1000
+    scores[k] = acc
+  else:
+    predicted_known = (predicted < 1001) * (predicted > 0)
+    predicted_unknown = ~ predicted_known
+    is_known_predicted_known = is_known * predicted_known
+    is_unknown_predicted_unknown = is_unknown * predicted_unknown
+    n_kk = np.sum(is_known_predicted_known)
+    n_uu = np.sum(is_unknown_predicted_unknown)
+    score_kk = 0.0
+    score_uu = 0.0
+    if n_kk > 0:
+      Labels_kk = Labels[is_known_predicted_known]
+      predicted_kk = predicted[is_known_predicted_known]
+      score_kk = np.sum( Labels_kk == predicted_kk) 
+    if n_uu > 0:
+      Labels_uu = Labels[is_unknown_predicted_unknown]
+      predicted_uu = predicted[is_unknown_predicted_unknown]
+      f_measure, precision, recall = calc_b3(L = Labels_uu , K = predicted_uu)
+      score_uu = n_uu * f_measure
+    scores[k] = ( score_kk + score_uu ) / 1000
+
+
+np.savetxt(fname = output_txt , X = scores, fmt='%1.8f', delimiter=',')
+
+print("\nEnd\n")
