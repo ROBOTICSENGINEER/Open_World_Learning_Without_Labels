@@ -1,372 +1,316 @@
 import time
-import torch
-import torchvision.models as models
-import torchvision.transforms as transforms
 import numpy as np
 import pandas as pd
 import os
-from PIL import Image
+import PIL
 from collections import OrderedDict
-from ..finch import FINCH
+from finch import FINCH
 import cv2
+import json
+import argparse
+import pickle
+import copy
+import gc
+import torch
+import torchvision.transforms as transforms
+from torch.utils.data import Dataset, DataLoader
+from timm.models.efficientnet import efficientnet_b3 as net_model_from_lib  # timm library
+from EVM import EVM_Training , EVM_Inference
 
-from ..MultipleEVM import MultipleEVM
-from ..timm.models.efficientnet import efficientnet_b3 as net_model_from_lib
-from torch.cuda.amp import autocast 
-
+import weibull
+import sys
+sys.modules['weibull'] = weibull
 
 t0 = time.time()
 
-number_of_tests = 5
 
-N_CPU = 32
-batch_size = 100
+parser = argparse.ArgumentParser(description='Open World Learning')
+parser.add_argument('--config', required=True, help='Path to config json file.')
+parser.add_argument('--test_csv', required=True, help='csv file of a test.')
+parser.add_argument('--result_csv', required=True, help='csv file name to save the result.')
+parser.add_argument('--no-adapt', action='store_true', help='no adaptation.')
+                    
 
-name = "mocoImagenetPlaces_tail33998_ct7_dm045_65"
+args_owl = parser.parse_args()
 
-tests_csv_root = "../data/all_test_166/"
+assert os.path.isfile(args_owl.config) 
 
-csv_folder = './csv_folder/mocoImagenetPlaces_045_065'
+config = json.load(open(args_owl.config))
 
-efficientnet_b3_path_mocoImagenet = '/scratch/moco_imagenet_0199.pth.tar'
-efficientnet_b3_path_mocoPlaces = '/scratch/moco_places2_0199.pth.tar'
-
-evm_model_path = '/scratch/EVM_cosine_model_imagnet_b3_mocoImagenetPlaces2_tail33998_ct70_dm45.hdf5'
-
-tailsize = 33998
-cover_threshold = 0.7
-distance_multiplier = 0.45
-unknown_dm = 0.65
-
-N_known_classes = 1000
-number_of_unknown_to_strat_clustering = 50 
-number_of_unknown_to_crate_evm = 5
+batch_size = 100 
 
 
-cores = 32
-detection_threshold = 0.001
+test_csv_path = config["test_csv_dir"] + args_owl.test_csv
+result_path = config["result_dir"] + args_owl.result_csv
+number_of_known_classes = config["number_of_known_classes"]
+cnn_path_moco_imagenet = config["cnn_path_moco_imagenet"]
+cnn_path_moco_places = config["cnn_path_moco_places"]
+evm_path = config["evm_path"]
+feature_known_path = config["feature_known_path"]
+cover_threshold = config["cover_threshold"]
+distance_multiplier = config["distance_multiplier"]
+unknown_distance_multiplier = config["unknown_distance_multiplier"]
+tail_size = config["tail_size"]
+distance_metric = config["distance_metric"]
+chunk_size = config["chunk_size"]
+n_cpu = config["n_cpu"]
+image_size = config["image_size"]
+np.random.seed(config["random_seed"])
+torch.manual_seed(config["random_seed"])
+test_size = config["test_size"]
+min_number_point_to_start_clustering = config["min_number_point_to_start_clustering"]
+min_number_cluster_to_start_adaptation = config["min_number_cluster_to_start_adaptation"]
+min_number_point_to_create_evm = config["min_number_point_to_create_evm"]
 
+assert os.path.isfile(test_csv_path) 
+assert os.path.isfile(cnn_path_moco_imagenet) 
+assert os.path.isfile(cnn_path_moco_places) 
+assert os.path.isfile(evm_path) 
+assert os.path.isdir(config["result_dir"]) 
+assert test_size % batch_size == 0
 
-levels = ['u10', 'u25', 'u50', 'u100']
+image_transform_val = transforms.Compose([
+            transforms.Resize(size=(image_size,image_size), interpolation=transforms.InterpolationMode.BICUBIC),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=config["transformer_mean"], std=config["transformer_std"]) ])
 
+class csv_data_class(Dataset):
 
-class TextBasedDataset(torch.utils.data.Dataset):
-  def __init__(self, text_file_path, data_root, transforms=None):
-    with open(text_file_path) as f:
-      self.samples = [line.rstrip() for line in f if line is not ''] 
-    self.transforms = transforms
-    self.data_root = data_root
+  def __init__(self, path, transform=None):
+    with open(path) as f:
+      self.samples = [line.rstrip() for line in f if line != '']
+      assert len(self.samples) == test_size
+    self.transform = transform
 
   def __len__(self):
     return len(self.samples)
 
   def __getitem__(self, index):
     S = self.samples[index]
-    image_path, L = S.split(',')
-    if self.data_root is not None:
-      img = cv2.imread(os.path.join(self.data_root, image_path), 1)
-    else:
-      img = cv2.imread(image_path, 1)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img_pil = Image.fromarray(img)
+    A, L = S.split(',')
+    img = cv2.cvtColor(cv2.imread(A,1), cv2.COLOR_BGR2RGB)
+    img_pil = PIL.Image.fromarray(img)
+    x = self.transform(img_pil)
+    i = A.find('ImageNet/')
+    address = A[i:]
+    #y = int(L)
+    #return (x,y)
+    return (address,x)
 
-    if self.transforms is not None:
-      image = self.transforms(img_pil)
+
+dataset_test = csv_data_class(path = test_csv_path, transform = image_transform_val)
+test_loader = DataLoader(dataset=dataset_test, batch_size=batch_size, shuffle=False, num_workers=n_cpu)
+
+
+
+t1 = time.time()
+
+cnn_model_moco_imagenet = net_model_from_lib(num_classes = number_of_known_classes)  # timm library
+cnn_model_moco_places = net_model_from_lib(num_classes = number_of_known_classes)  # timm library
+
+
+assert os.path.isfile(cnn_path_moco_imagenet)
+checkpoint = torch.load(cnn_path_moco_imagenet, map_location="cpu")
+# rename moco pre-trained keys
+print('keys = ', checkpoint.keys())
+state_dict = checkpoint['state_dict']
+for k in list(state_dict.keys()):
+  # retain only encoder_q up to before the embedding layer
+  if k.startswith('module.encoder_q') and not k.startswith('module.encoder_q.fc'):
+    # remove prefix
+    state_dict[k[len("module.encoder_q."):]] = state_dict[k]
+  # delete renamed or unused k
+  del state_dict[k]
+msg = cnn_model_moco_imagenet.load_state_dict(state_dict, strict=False)
+assert set(msg.missing_keys) == {"classifier.weight", "classifier.bias"}
+for parameter in cnn_model_moco_imagenet.parameters():
+  parameter.requires_grad = False
+cnn_model_moco_imagenet.cuda()
+cnn_model_moco_imagenet.eval()
+
+
+assert os.path.isfile(cnn_path_moco_places)
+checkpoint = torch.load(cnn_path_moco_places, map_location="cpu")
+# rename moco pre-trained keys
+print('keys = ', checkpoint.keys())
+state_dict = checkpoint['state_dict']
+for k in list(state_dict.keys()):
+  # retain only encoder_q up to before the embedding layer
+  if k.startswith('module.encoder_q') and not k.startswith('module.encoder_q.fc'):
+    # remove prefix
+    state_dict[k[len("module.encoder_q."):]] = state_dict[k]
+  # delete renamed or unused k
+  del state_dict[k]
+msg = cnn_model_moco_places.load_state_dict(state_dict, strict=False)
+assert set(msg.missing_keys) == {"classifier.weight", "classifier.bias"}
+for parameter in cnn_model_moco_places.parameters():
+  parameter.requires_grad = False
+cnn_model_moco_places.cuda()
+cnn_model_moco_places.eval()
+
+
+t2 = time.time()
+print("Loading cnn time = ", t2 - t1)
+
+
+args_evm  = argparse.Namespace()
+args_evm.cover_threshold = [cover_threshold]
+args_evm.distance_multiplier = [distance_multiplier]
+args_evm.tailsize = [tail_size]
+args_evm.distance_metric = distance_metric
+args_evm.chunk_size = chunk_size
+
+args_evm_unknown = copy.deepcopy(args_evm)
+args_evm_unknown.distance_multiplier = [unknown_distance_multiplier]
+
+with torch.no_grad():
+  evm_model = pickle.load( open(evm_path , "rb" ) )
+  
+  t3 = time.time()
+  print("Loading evm time = ", t3 - t2)
+  
+  if not args_owl.no_adapt: 
+    data_train_evm =  torch.from_numpy(  np.load(feature_known_path) )
+    features_dict_train = OrderedDict()
+    for k in range(1, number_of_known_classes+1):
+      F = data_train_evm[data_train_evm[:,0]==k]
+      features_dict_train[k] = F[:,1:].detach().clone()#.cuda()
+    t31 = time.time()
+    print("Loading feature known time = ", t31 - t3)
+  
+  torch.backends.cudnn.benchmark=True
+
+  t4 = time.time()
+  number_of_discovered_classes = 0 
+  residual_dict = dict()
+  clustered_dict = dict()
+  probability_list = [0] * int(test_size/batch_size)
+  image_list = [] 
+  for i, (image_names, x) in enumerate(test_loader, 0):
+    t5 = time.time()
+    print("\nbatach ", i+1)
+    x = x.cuda()
+    FV_moco_imagenet, Logit = cnn_model_moco_imagenet(x)
+    FV_moco_places, Logit = cnn_model_moco_places(x)
+    del x, Logit
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.cuda.ipc_collect()
+    FV_moco_imagenet = FV_moco_imagenet.cpu()
+    FV_moco_places = FV_moco_places.cpu()
+    FV = torch.cat((FV_moco_imagenet, FV_moco_places), 1)
+    feature_dict = OrderedDict()
+    feature_dict[0] = FV.double()
+    Pr_iterator = EVM_Inference([0], feature_dict, args_evm, 0, evm_model)
+    for j,pr in enumerate(Pr_iterator):
+      prob  = pr[1][1]#.cuda()
+      assert j == 0
+    del Pr_iterator, pr
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.cuda.ipc_collect()
+    n = 1 + number_of_known_classes + number_of_discovered_classes
+    probability_tensor = torch.zeros(prob.shape[0], n)
+    probability_tensor[:,1:] = prob
+    P_max_all , _  = torch.max(prob, axis=1)
+    pu = 1 -  P_max_all
+    probability_tensor[:,0] = pu
+    norm = torch.norm(probability_tensor, p=1, dim=1)
+    normalized_tensor = probability_tensor/norm[:,None]
+    probability_list[i] = normalized_tensor.clone().cpu()
+    image_list = image_list + list(image_names)
+    t6 = time.time()
+    print("classification time = ", t6 - t5)
     
-    y = int(L)
     
-    return image_path, image, y
-
-
-
-class owl(object):
-  def __init__(self, test_id,
-         csv_folder, cores, detection_threshold):
-
-    self.test_id = test_id
-    
-    self.red_light = 0
-
-
-    self.csv_folder = csv_folder
-    self.cores = cores
-    self.detection_threshold = detection_threshold
-
-    self.T = detection_threshold
-    self.UU = 0
-    
-    self.residual_dict = {} #empty dictionary
-    self.clustered_dict= {} #empty dictionary
-    
-    
-    evm_known_feature_path = evm_model_path
-
-    self.psi = number_of_unknown_to_strat_clustering
-    self.rho = number_of_unknown_to_crate_evm
-    
-
-    
-    
-    self.number_known_classes = N_known_classes 
-    
-    # All initialization happens here
-    self.image_size = 300
-    self.image_transform_test = transforms.Compose([
-      transforms.Resize(size=(self.image_size,self.image_size), interpolation=Image.BICUBIC),
-      transforms.ToTensor(),
-      transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]) ])
-
-    # initialize feature extractor moco Imagenet
-    self.net_mocoImagenet = \
-        net_model_from_lib(num_classes=N_known_classes)
-    checkpoint_mocoImagenet = torch.load(efficientnet_b3_path_mocoImagenet, map_location="cpu")
-    state_dict_pre_mocoImagenet = checkpoint_mocoImagenet['state_dict']
-    
-    # rename moco pre-trained keys moco Imagenet
-    
-    #print('keys = ', checkpoint.keys())
-    state_dict_mocoImagenet = checkpoint_mocoImagenet['state_dict']
-    for k in list(state_dict_mocoImagenet.keys()):
-      # retain only encoder_q up to before the embedding layer
-      if k.startswith('module.encoder_q') and not k.startswith('module.encoder_q.fc'):
-        # remove prefix
-        state_dict_mocoImagenet[k[len("module.encoder_q."):]] = state_dict_mocoImagenet[k]
-      # delete renamed or unused k
-      del state_dict_mocoImagenet[k]
-    
-    msg = self.net_mocoImagenet.load_state_dict(state_dict_mocoImagenet, strict=False)
-    assert set(msg.missing_keys) == {"classifier.weight", "classifier.bias"}
-
-
-    # initialize feature extractor moco Places2
-    self.net_mocoPlaces = \
-        net_model_from_lib(num_classes=N_known_classes)
-    checkpoint_mocoPlaces = torch.load(efficientnet_b3_path_mocoPlaces, map_location="cpu")
-    state_dict_pre_mocoPlaces = checkpoint_mocoPlaces['state_dict']
-    
-    # rename moco pre-trained keys
-    
-    #print('keys = ', checkpoint.keys())
-    state_dict_mocoPlaces = checkpoint_mocoPlaces['state_dict']
-    for k in list(state_dict_mocoPlaces.keys()):
-      # retain only encoder_q up to before the embedding layer
-      if k.startswith('module.encoder_q') and not k.startswith('module.encoder_q.fc'):
-        # remove prefix
-        state_dict_mocoPlaces[k[len("module.encoder_q."):]] = state_dict_mocoPlaces[k]
-      # delete renamed or unused k
-      del state_dict_mocoPlaces[k]
-    
-    msg = self.net_mocoPlaces.load_state_dict(state_dict_mocoPlaces, strict=False)
-    assert set(msg.missing_keys) == {"classifier.weight", "classifier.bias"}
-
-
-    for parameter in self.net_mocoImagenet.parameters():
-      parameter.requires_grad = False
-    for parameter in self.net_mocoPlaces.parameters():
-      parameter.requires_grad = False
-
-
-    self.net_mocoImagenet.to("cuda")
-    self.net_mocoPlaces.to("cuda")
-    self.net_mocoImagenet.eval()
-    self.net_mocoPlaces.eval()
- 
-    device = torch.device('cuda')
-    self.net_mocoImagenet = torch.nn.DataParallel(self.net_mocoImagenet)
-    self.net_mocoPlaces = torch.nn.DataParallel(self.net_mocoPlaces)
-    self.net_mocoImagenet.to(device)
-    self.net_mocoPlaces.to(device) 
-    
-    
-    # initialize EVM
-
-
-    self.evm = MultipleEVM(tailsize=tailsize,
-                 cover_threshold=cover_threshold,
-                 distance_multiplier=distance_multiplier)
-    self.evm.load(evm_model_path)
-    
-
-
-  def feature_extraction(self, dataset_path, dataset_root):
-    # Create Dataloader for novelty detection
-    
-    num_workers = N_CPU
-    dataset = TextBasedDataset(dataset_path, dataset_root, self.image_transform_test)
-    loader = torch.utils.data.DataLoader(dataset, batch_size,  shuffle=False, num_workers=num_workers)
-    self.features_dict = {}
-    self.logit_dict = {}
-    for k, data in enumerate(loader):
-      with autocast():
-        image_paths, images_moco, L = data
-        FV_mocoImagenet, image_Logits_mocoImagene = self.net_mocoImagenet(images_moco.to('cuda'))
-        FV_mocoPlaces, image_Logits_mocoPlaces = self.net_mocoPlaces(images_moco.to('cuda'))
-
-        image_features = np.hstack((FV_mocoImagenet.cpu().data.numpy(),FV_mocoPlaces.cpu().data.numpy()))
-        
-        for image_name, image_feature in zip(image_paths, image_features):
-          self.features_dict[image_name] = image_feature
-    return
-
-
-  def novelty_characterization(self, level, test_id, round_id):
-
-    # classify image to 1+K+UU classes
-    
-    if  self.red_light > 0.5:
-      pre_post = "post"
-    else:
-      pre_post = "pre"
-    
-    result_path = os.path.join(self.csv_folder, 
-                  f"characterization_{level}_{test_id}_{pre_post}_" + str(round_id).zfill(2)+".csv")
-    image_names, FVs = zip(*self.features_dict.items())
-    FVs = torch.from_numpy(np.array(FVs))
-    
-    Pr = self.evm.class_probabilities(FVs)
-    Pr = torch.tensor(Pr)
-    Pm,_ = torch.max(Pr, dim=1)
-    pu = 1 - Pm
-    all_rows_tensor = torch.cat((pu.view(-1,1), Pr), 1)
-    norm = torch.norm(all_rows_tensor, p=1, dim=1)
-    normalized_tensor = all_rows_tensor/norm[:,None]
-    col1 = ['id', 'P_unknown']
-    col2 = ['P_'+str(k) for k in range(1, self.number_known_classes+1)]
-    col3 = ['U_'+str(k) for k in range(1, self.UU+1)]
-    col = col1 + col2 + col3
-    self.df_characterization = pd.DataFrame(zip(image_names,*normalized_tensor.t().tolist()), columns=col)
-    self.df_characterization.to_csv(result_path, index = False, header = False, float_format='%.4f')
-    
-    result_path_raw = os.path.join(self.csv_folder, 
-                  f"raw_characterization_{level}_{test_id}_{pre_post}_" + str(round_id).zfill(2)+".csv")
-    self.df_characterization_raw = pd.DataFrame(zip(image_names,*all_rows_tensor.t().tolist()), columns=col)
-    self.df_characterization_raw.to_csv(result_path_raw, index = False, header = False, float_format='%.4f')
-    return result_path
-
-
-  def novelty_adaption(self, level=None, test_id=None, round_id=None):
-    """
-    Update evm models
-    :param features_dict (dict): A dictionary of image ids and image features
-    :return none
-    """
-    m = -2
-    nu = 0 
-    if  self.red_light > 0.5:
-      print("Start: len(self.clustered_dict) = ", len(self.clustered_dict))
-      for k, row in self.df_characterization.iterrows():
-        if row[1] > self.T:  # predicted unnkwon unknown
-          self.residual_dict[row[0]] = self.features_dict[row[0]] 
-      print("Start: len(self.residual_dict) = ", len(self.residual_dict))
-      if len(self.residual_dict) >= self.psi:
-        data =  np.vstack(self.residual_dict.values())
+    if not args_owl.no_adapt:
+      nu = 0 
+      p_max , i_max  = torch.max(normalized_tensor, axis=1)
+      for k in range(normalized_tensor.shape[0]):
+        if i_max[k] == 0 :  # predicted unnkwon unknown
+          residual_dict[image_names[k]] = FV[k,:].numpy()
+      
+      if len(residual_dict) >= min_number_point_to_start_clustering:
+        image_names_residual, FVs_residual = zip(*residual_dict.items())
+        data =  np.vstack(list(FVs_residual))
         c_all, num_clust, req_c = FINCH(data)
         cluster_labels = c_all[:,-1]
-        m = num_clust[-1]  # number of clusters after clustering. 
+        number_of_clusters = num_clust[-1]  # number of clusters after clustering. 
         to_be_delete = []
-        if m >= 2:
-          image_names_residual, FVs_residual = zip(*self.residual_dict.items())
-          if len(self.clustered_dict)>0:
-            image_names_clustered, FVs_clustered = zip(*self.clustered_dict.items())
+        if number_of_clusters >= min_number_cluster_to_start_adaptation:
+          if len(clustered_dict)>0:
+            image_names_clustered, FVs_clustered = zip(*clustered_dict.items())
           else:
             FVs_clustered=[]
-          for k in range(m):  # number of clusters after clustering. 
-            index = [i for i in range(len(cluster_labels)) if cluster_labels[i] == k]
-            index_neg = [i for i in range(len(cluster_labels)) if cluster_labels[i] != k]
-            if len(index) > self.rho:
+          class_to_process = []
+          for cluster_number in range(number_of_clusters):  # number of clusters after clustering.
+            index = [iii for iii in range(len(cluster_labels)) if cluster_labels[iii] == cluster_number]
+            if len(index) >= min_number_point_to_create_evm:
               to_be_delete = to_be_delete + index
-              nu = nu+1
-              FV_positive = torch.from_numpy(np.array([FVs_residual[k] for k in index]))
-              FV_negative_1 = [FVs_residual[k] for k in index_neg]
-              FV_negative_2 = list(FVs_clustered)
-              FV_negative = torch.from_numpy(np.array(FV_negative_1 + FV_negative_2))
-              y = self.number_known_classes + self.UU + nu
-              # Train a new EVM with FV_positive and [FV_negative_1+FVs_clustered] as negatives
-              # Insert the new EVM to new_EVM_list
-              self.evm.train_update(new_points = FV_positive, label = (y-1), distance_multiplier = unknown_dm , extra_negatives = FV_negative )
+              nu = nu + 1
+              class_number = int(nu+number_of_discovered_classes+number_of_known_classes)
+              features_dict_train[class_number] = (torch.from_numpy(np.array([FVs_residual[jjj] for jjj in index]))).double()#.cuda()
+              class_to_process.append(class_number)
+          
+          if len(class_to_process) > 0:
+            list_of_tuples = [0.0] * len(class_to_process)
+            evm_iterator_i = EVM_Training(class_to_process, features_dict_train, args_evm_unknown, 0)
+            evm_counter = 0
+            for evm in enumerate(evm_iterator_i):
+              # label = evm[1][1][0]
+              # mini_evm = evm[1][1][1]
+              list_of_tuples[evm_counter] = (evm[1][1][0], evm[1][1][1])
+              evm_counter = evm_counter + 1
 
-            
-        if nu > 0:
-          image_covered = []
-          for k in (to_be_delete):
-            image_covered.append(image_names_residual[k])
-          for name in image_covered:
-            fv_name = self.residual_dict[name]
-            self.clustered_dict.update({name:fv_name})
-            del self.residual_dict[name]
-        self.UU = self.UU + nu
-      print("End: len(self.clustered_dict) = ", len(self.clustered_dict))
-      print("End: len(self.residual_dict) = ", len(self.residual_dict))
-      print(f"{nu} new evm classes added. Total discovered classes = {self.UU}")
-    return
-    
-  def set_red_light(self, x):
-      self.red_light = x
-      return
+            for j,class_number in enumerate(class_to_process):
+              # evm is an OrderedDict
+              assert list_of_tuples[j][0] == class_number
+              evm_model[class_number] = list_of_tuples[j][1]
+          
+          del evm_iterator_i, evm
+          gc.collect()
+          torch.cuda.empty_cache()
+          torch.cuda.ipc_collect()
 
-  def save(self, level, test_id, name):
-    self.evm.save(f'/scratch/owl_{level}_{test_id}_EVM_{name}.hdf5')
+          if nu > 0:
+            image_covered = []
+            for j in (to_be_delete):
+              image_covered.append(image_names_residual[j])
+            for name in image_covered:
+              fv_name = residual_dict[name]
+              clustered_dict.update({name:fv_name})
+              del residual_dict[name]
+          number_of_discovered_classes = number_of_discovered_classes + nu
+        print(f"{nu} new evm classes added.")
+      print(f"len(clustered_dict) = {len(clustered_dict)}")
+      print(f"len(residual_dict) = {len(residual_dict)}")
+      print(f"Total discovered classes = {number_of_discovered_classes}")
+      gc.collect()
+      torch.cuda.empty_cache()
+      torch.cuda.ipc_collect()
+      t7 = time.time()
+      print("adaptation time = ", t7 - t6)
+      print("batch time = ", t7 - t5)
 
-####################################
+  t8 = time.time()
+  print("loop time = ", t8 - t4)
 
-if not os.path.exists(csv_folder):
-  os.makedirs(csv_folder)
+  normalized_tensor = torch.zeros(test_size,probability_list[-1].shape[1])
 
+  n1 = 0
+  for k,p in enumerate(probability_list):
+    j = p.shape[1]
+    n2 = n1 + p.shape[0]
+    normalized_tensor[n1:n2,:j] = p
+    n1 = n2
 
-for level in levels:
-  for test_id in range(number_of_tests):
-    t0 = time.time()
-  
-    with open(tests_csv_root + f'test_{level}_{test_id}.csv', "r") as f:
-      image_list = f.readlines()
-      image_list = list(map(str.strip, image_list))
+  col = ["name"] + [f"c{k}" for k in range(probability_list[-1].shape[1])]
+  df_characterization = pd.DataFrame(zip(image_list,*normalized_tensor.t().tolist()), columns=col)
+  df_characterization.to_csv(result_path, index = False, header = False, float_format='%.4f')
+  t9 = time.time()
+  print("saving time = ", t9 - t8)
 
-    #csv_folder_i = csv_folder + f"/{level}_test_{test_id}"
-    csv_folder_i = csv_folder
-    owl_alg = owl( test_id, csv_folder_i, cores, detection_threshold)
-    
-    t1 = time.time()
-    print(f"Loading time {t1-t0}")
-    start_time = time.time()
-    
-    num_rounds = (len(image_list)) //batch_size
-    
-    if ( (len(image_list)) % batch_size) !=0 :
-      num_rounds += 1
-    
-    print("num_rounds = ", num_rounds)
-    
-    owl_alg.set_red_light(0)
-    for round_id in range(num_rounds):
-      print(f"\n\level {level}, test_id {test_id+1} from {number_of_tests}, red light off,  round_id {round_id+1} from {num_rounds}")
-      round_file_name = name + "temp.csv"
-      with open(round_file_name, "w") as f:
-        f.writelines("\n".join(image_list[round_id*batch_size : (round_id+1)*batch_size]))
-      owl_alg.feature_extraction(dataset_path = round_file_name, dataset_root=None)
-      owl_alg.novelty_characterization(level, test_id, round_id)
-      os.remove(round_file_name)
-
-
-    owl_alg.set_red_light(1)
-    for round_id in range(num_rounds):
-      print(f"\nlevel {level}, test_id {test_id+1} from {number_of_tests}, red light on,  round_id {round_id+1} from {num_rounds}")
-      round_file_name = name + "temp.csv"
-      with open(round_file_name, "w") as f:
-        f.writelines("\n".join(image_list[round_id*batch_size : (round_id+1)*batch_size]))
-      owl_alg.feature_extraction(dataset_path = round_file_name, dataset_root=None)
-      owl_alg.novelty_characterization(level, test_id, round_id)
-      owl_alg.novelty_adaption(level, test_id, round_id)
-      os.remove(round_file_name)
-
-    
-    #owl_alg.save(level = level, test_id = test_id, name = name)
-
-    
-    del owl_alg
-    end_time = time.time()
-    print(f"Loading time {t1-t0}")
-    print(f"run_{test_id} time {end_time-start_time}")
-    print(f"Total time test_{test_id} {end_time-start_time+t1-t0}")
-
-
+t10 = time.time()
+print("\ntotal time = ", t10 - t0)
+print("End\n")
 
