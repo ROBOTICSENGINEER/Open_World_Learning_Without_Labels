@@ -1,9 +1,7 @@
 import numpy as np
 import torch
-import os, sys
-from pynvml import *
 
-class weibull:
+class Weibull:
     def __init__(self, saved_model=None):
         if saved_model:
             self.wbFits = torch.zeros(saved_model['Scale'].shape[0],2)
@@ -14,6 +12,9 @@ class weibull:
             self.smallScoreTensor = saved_model['smallScoreTensor']
         return
 
+    def tocpu(self):
+        self.wbFits = self.wbFits.cpu()
+        self.smallScoreTensor = self.smallScoreTensor.cpu()
 
     def return_all_parameters(self):
         return dict(Scale = self.wbFits[:, 1],
@@ -23,27 +24,47 @@ class weibull:
                     smallScoreTensor = self.smallScoreTensor)
 
 
-    def FitLow(self,data, tailSize, isSorted=False):
+    def FitLow(self,data, tailSize, isSorted=False, gpu=0):
         """
         data --> 5000 weibulls on 0 dim
              --> 10000 distances for each weibull on 1 dim
         """
         self.sign = -1
-        self._determine_splits(data, tailSize, isSorted)
-        if self.splits == 1:
-            return self._weibullFitting(data, tailSize, isSorted)
+        max_tailsize_in_1_chunk = 100000
+        if tailSize <= max_tailsize_in_1_chunk:
+            self.splits = 1
+            to_return = self._weibullFitting(data, tailSize, isSorted, gpu)
         else:
-            return self._weibullFilltingInBatches(data, tailSize, isSorted)
-            
+            self.splits = tailSize//max_tailsize_in_1_chunk + 1
+            to_return = self._weibullFilltingInBatches(data, tailSize, isSorted, gpu)
+        return to_return
+
+
+    # TB's new mode that flips the data around the max and then does a fit low reject so that its effectively modeling just above the max . 
+    def FitHighFlipped(self,data, tailSize, isSorted=False, gpu=0):
+        """
+        data --> 5000 weibulls on 0 dim
+             --> 10000 distances for each weibull on 1 dim
+        """
+        self.sign = -1
+        maxval = data.max()
+        #flip the data around the max so the smallest points are just beyond the data but mirrors the distribution
+        data = 2* maxval - data
+        max_tailsize_in_1_chunk = 100000
+        if tailSize <= max_tailsize_in_1_chunk:
+            self.splits = 1
+            to_return = self._weibullFitting(data, tailSize, isSorted, gpu)
+        else:
+            self.splits = tailSize//max_tailsize_in_1_chunk + 1
+            to_return = self._weibullFilltingInBatches(data, tailSize, isSorted, gpu)
+        return to_return
+
 
     def FitHigh(self, data, tailSize, isSorted=False):
         self.sign = 1
-        self._determine_splits(data, tailSize, isSorted)
-        if self.splits == 1:
-            return self._weibullFitting(data, tailSize, isSorted)
-        else:
-            return self._weibullFilltingInBatches(data, tailSize, isSorted)
-        
+        self.splits = 1
+        return self._weibullFitting(data, tailSize, isSorted)
+
 
     def wscore(self, distances):
         """
@@ -64,12 +85,13 @@ class weibull:
         if len(self.smallScoreTensor.shape)==2:
             smallScoreTensor=self.smallScoreTensor[:,0]
         distances = distances + 1 - smallScoreTensor.to(self.deviceName)[None,:]
-        weibulls = torch.distributions.weibull.Weibull(scale_tensor.to(self.deviceName),shape_tensor.to(self.deviceName))
+        weibulls = torch.distributions.weibull.Weibull(scale_tensor.to(self.deviceName),shape_tensor.to(self.deviceName),
+                                                       validate_args=False)
         distances = distances.clamp(min=0)
         return weibulls.cdf(distances)
 
 
-    def _weibullFitting(self, dataTensor, tailSize, isSorted=False):
+    def _weibullFitting(self, dataTensor, tailSize, isSorted=False, gpu=0):
         self.deviceName = dataTensor.device
         if isSorted:
             sortedTensor = dataTensor
@@ -111,7 +133,7 @@ class weibull:
         resultTensor[startIndex:endIndex,:] = result_batch.cpu()
         reultTensor_smallScoreTensor[startIndex:endIndex,:] = result_batch_smallScoreTensor.cpu()
     
-        self.wbFits = resultTensor   
+        self.wbFits = resultTensor
         self.smallScoreTensor = reultTensor_smallScoreTensor
 
 
@@ -155,27 +177,3 @@ class weibull:
             computed_params[torch.logical_not(not_completed), 1] = lam[torch.logical_not(not_completed)]
             k_t_1 = k.clone()
         return computed_params  # Shape (SC), Scale (FE)
-        
-    
-    def _determine_splits(self, inputTensor, tailSize, isSorted = 0):
-        dtype_bytes = 8 # since float64
-        # split chunks according to available GPU memory
-        nvmlInit()
-        h = nvmlDeviceGetHandleByIndex(0)
-        info = nvmlDeviceGetMemoryInfo(h)
-        gpu_free_mem = info.free / (1024 * 1024) # amount of free memeory in MB
-        #print(gpu_free_mem)
-        
-        height, width = inputTensor.shape[0], inputTensor.shape[1]
-        size_estimate = height * width * dtype_bytes * 5
-        total_mem = (size_estimate) / (1024 * 1024) # amount in MB
-        #print(total_mem)
-        
-        if total_mem < (gpu_free_mem * 0.7): #no chunks if GPU mem is enough
-            split = 1
-        else:
-            split = round((total_mem) / (gpu_free_mem * 0.7))  
-        
-        self.splits = split
-        
-        #print('self.splits = ', self.splits)
