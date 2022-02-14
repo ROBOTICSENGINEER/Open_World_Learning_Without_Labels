@@ -1,0 +1,4 @@
+Efficientnet B3 SP
+thresh_sm = 0.39957085251808167
+thresh_energy = 1.4008464813232422
+thresh_evm = 0.019387608394026756
