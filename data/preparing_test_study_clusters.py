@@ -4,7 +4,7 @@ import os
 import json
 
 
-'''
+"""
 test 1
 325 ==> 70, 81, 90, 95, 96, 99, 102, 103, 104, 160
 
@@ -19,9 +19,9 @@ test 4
 
 test 5
 990 ==> 49, 50, 51, 52, 54, 146, 149, 150, 153, 154
-'''
+"""
 
-'''
+"""
 
 with open('new_166_dict.json', 'r') as f:
     unknown_166_dict = json.load(f)
@@ -50,41 +50,39 @@ for k, test in enumerate(test_list):
         full_path = folder_path + '/' + filename
         csv_file.write(full_path + ',' + str(class_number) + '\n')
   
-'''
+"""
 
 
-#["imagenet_test_v2_73.csv", "imagenet_test_v2_85.csv" , "imagenet_test_v2_93.csv"]
+# ["imagenet_test_v2_73.csv", "imagenet_test_v2_85.csv" , "imagenet_test_v2_93.csv"]
 
 
 df_known = pd.read_csv("imagenet_test_v2_93.csv", header=None)
 for k in range(5):
-  df_unknown = pd.read_csv(f"selected_imagenet_all_unknown_{k+1}.csv", header=None)
-  csv_file_output = f"test_study_clusters_easy_{k+1}.csv"
-  df_known = df_known.sample(frac=1)
-  df_unknown = df_unknown.sample(frac=1)
-  n_all = 5000
-  n_unknown = 2500
-  n_known = n_all - n_unknown
-  d_known = df_known.iloc[:n_known,:]
-  d_unknown = df_unknown.iloc[:n_unknown,:]
-  d_concat = pd.concat([d_known, d_unknown])
-  d_test = d_concat.sample(frac=1)
-  d_test.to_csv(csv_file_output, index=False, header=False)
-
+    df_unknown = pd.read_csv(f"selected_imagenet_all_unknown_{k+1}.csv", header=None)
+    csv_file_output = f"test_study_clusters_easy_{k+1}.csv"
+    df_known = df_known.sample(frac=1)
+    df_unknown = df_unknown.sample(frac=1)
+    n_all = 5000
+    n_unknown = 2500
+    n_known = n_all - n_unknown
+    d_known = df_known.iloc[:n_known, :]
+    d_unknown = df_unknown.iloc[:n_unknown, :]
+    d_concat = pd.concat([d_known, d_unknown])
+    d_test = d_concat.sample(frac=1)
+    d_test.to_csv(csv_file_output, index=False, header=False)
 
 
 df_known = pd.read_csv("imagenet_test_v2_73.csv", header=None)
 for k in range(5):
-  df_unknown = pd.read_csv(f"selected_imagenet_all_unknown_{k+1}.csv", header=None)
-  csv_file_output = f"test_study_clusters_hard_{k+1}.csv"
-  df_known = df_known.sample(frac=1)
-  df_unknown = df_unknown.sample(frac=1)
-  n_all = 5000
-  n_unknown = 2500
-  n_known = n_all - n_unknown
-  d_known = df_known.iloc[:n_known,:]
-  d_unknown = df_unknown.iloc[:n_unknown,:]
-  d_concat = pd.concat([d_known, d_unknown])
-  d_test = d_concat.sample(frac=1)
-  d_test.to_csv(csv_file_output, index=False, header=False)
-
+    df_unknown = pd.read_csv(f"selected_imagenet_all_unknown_{k+1}.csv", header=None)
+    csv_file_output = f"test_study_clusters_hard_{k+1}.csv"
+    df_known = df_known.sample(frac=1)
+    df_unknown = df_unknown.sample(frac=1)
+    n_all = 5000
+    n_unknown = 2500
+    n_known = n_all - n_unknown
+    d_known = df_known.iloc[:n_known, :]
+    d_unknown = df_unknown.iloc[:n_unknown, :]
+    d_concat = pd.concat([d_known, d_unknown])
+    d_test = d_concat.sample(frac=1)
+    d_test.to_csv(csv_file_output, index=False, header=False)

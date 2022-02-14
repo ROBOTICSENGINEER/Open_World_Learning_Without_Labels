@@ -45,7 +45,7 @@ for cluster in range(1, 1 + N_cluster):
 
     if s < (N / 5):
         prefix = "good_"
-    elif  s >= (N / 2):
+    elif s >= (N / 2):
         prefix = "bad_"
     else:
         prefix = "rest_"

@@ -19,12 +19,12 @@ data = torch.load("/scratch/mjafarzadeh/feature_clustering_ranked.pth")
 #   R.append(cluster['R_known_images']*100)
 #   E.append(cluster['entropy'])
 #   V.append(v)
-# 
+#
 # fig, ax = plt.subplots()
 # im = ax.scatter(V, E, marker = '.', c = R, cmap = "RdYlGn_r", vmin = 0.0, vmax = max(R))
 # cbar = fig.colorbar(im, ax=ax, shrink=0.95, label = "% of knowns")
-# 
-# 
+#
+#
 # ax.set_ylabel('Entropy')
 # ax.set_xlabel('Variance from Center')
 # plt.savefig(fname ='variance_center.png', dpi=300, bbox_inches='tight')
@@ -34,7 +34,7 @@ data = torch.load("/scratch/mjafarzadeh/feature_clustering_ranked.pth")
 # E = []
 # V = []
 # R = []
-# 
+#
 # for cluster_id, cluster in data.items():
 #   if cluster['clustering'] != "finch": continue
 #   F = cluster['feature']
@@ -48,11 +48,11 @@ data = torch.load("/scratch/mjafarzadeh/feature_clustering_ranked.pth")
 #   R.append(cluster['R_known_images']*100)
 #   E.append(cluster['entropy'])
 #   V.append(v)
-# 
+#
 # fig, ax = plt.subplots()
 # im = ax.scatter(V, E, marker = '.', c = R, cmap = "RdYlGn_r", vmin = 0.0, vmax = max(R))
 # cbar = fig.colorbar(im, ax=ax, shrink=0.95, label = "% of knowns")
-# 
+#
 # ax.set_ylabel('Entropy')
 # ax.set_xlabel('Variance from Center (cosine)')
 # plt.savefig(fname ='variance_center_cosine.png', dpi=300, bbox_inches='tight')
@@ -70,11 +70,11 @@ data = torch.load("/scratch/mjafarzadeh/feature_clustering_ranked.pth")
 #   R.append(cluster['R_known_images']*100)
 #   E.append(cluster['entropy'])
 #   V.append(v)
-# 
+#
 # fig, ax = plt.subplots()
 # im = ax.scatter(V, E, marker = '.', c = R, cmap = "RdYlGn_r", vmin = 0.0, vmax = max(R))
 # cbar = fig.colorbar(im, ax=ax, shrink=0.95, label = "% of knowns")
-# 
+#
 # ax.set_ylabel('Entropy')
 # ax.set_xlabel('Variance from each other')
 # plt.savefig(fname ='variance_others.png', dpi=300, bbox_inches='tight')
@@ -94,11 +94,11 @@ data = torch.load("/scratch/mjafarzadeh/feature_clustering_ranked.pth")
 #   R.append(cluster['R_known_images']*100)
 #   E.append(cluster['entropy'])
 #   V.append(v)
-# 
+#
 # fig, ax = plt.subplots()
 # im = ax.scatter(V, E, marker = '.', c = R, cmap = "RdYlGn_r", vmin = 0.0, vmax = max(R))
 # cbar = fig.colorbar(im, ax=ax, shrink=0.95, label = "% of knowns")
-# 
+#
 # ax.set_ylabel('Entropy')
 # ax.set_xlabel('Variance from each other (cosine)')
 # plt.savefig(fname ='variance_others_cosine.png', dpi=300, bbox_inches='tight')
@@ -116,11 +116,11 @@ data = torch.load("/scratch/mjafarzadeh/feature_clustering_ranked.pth")
 #   R.append(cluster['R_known_images']*100)
 #   E.append(cluster['entropy'])
 #   V.append(v)
-# 
+#
 # fig, ax = plt.subplots()
 # im = ax.scatter(V, E, marker = '.', c = R, cmap = "RdYlGn_r", vmin = 0.0, vmax = max(R))
 # cbar = fig.colorbar(im, ax=ax, shrink=0.95, label = "% of knowns")
-# 
+#
 # ax.set_ylabel('Entropy')
 # ax.set_xlabel('Max over sum singular value')
 # plt.savefig(fname ='max_over_sum_singular_value.png', dpi=300, bbox_inches='tight')
@@ -138,11 +138,11 @@ data = torch.load("/scratch/mjafarzadeh/feature_clustering_ranked.pth")
 #   R.append(cluster['R_known_images']*100)
 #   E.append(cluster['entropy'])
 #   V.append(v.detach().clone().numpy())
-# 
+#
 # fig, ax = plt.subplots()
 # im = ax.scatter(V, E, marker = '.', c = R, cmap = "RdYlGn_r", vmin = 0.0, vmax = max(R))
 # cbar = fig.colorbar(im, ax=ax, shrink=0.95, label = "% of knowns")
-# 
+#
 # ax.set_ylabel('Entropy')
 # ax.set_xlabel('max over second singular value')
 # plt.savefig(fname ='max_over_second_singular_value.png', dpi=300, bbox_inches='tight')
@@ -164,7 +164,7 @@ data = torch.load("/scratch/mjafarzadeh/feature_clustering_ranked.pth")
 #   E.append(cluster['entropy'])
 #   V.append(v.item())
 #   C.append(compactness.item())
-# 
+#
 # fig, ax = plt.subplots()
 # im = ax.scatter(V, C, marker='.', c = E, cmap = "RdYlGn_r", vmin = 0.0, vmax = max(E))
 # cbar = fig.colorbar(im, ax=ax, shrink=0.95, label = "Entropy")
@@ -192,7 +192,7 @@ data = torch.load("/scratch/mjafarzadeh/feature_clustering_ranked.pth")
 #   E.append(cluster['entropy'])
 #   V.append(v.item())
 #   C.append(compactness.item())
-# 
+#
 # fig, ax = plt.subplots()
 # im = ax.scatter(V, C, marker='.', c = E, cmap = "RdYlGn_r", vmin = 0.0, vmax = max(E))
 # cbar = fig.colorbar(im, ax=ax, shrink=0.95, label = "Entropy")
@@ -207,31 +207,31 @@ E = []
 VE = []
 VC = []
 for cluster_id, cluster in data.items():
-  if cluster['clustering'] != "finch": continue
-  E.append(cluster['entropy'])
-  FV = cluster['feature']
-  center = torch.mean(FV, dim = 0)
-  center = center.repeat(FV.shape[0],1)
-  de = FV - center
-  ve = torch.linalg.matrix_norm(de, ord = 'fro')**2 / (FV.shape[0]-1)
+    if cluster["clustering"] != "finch":
+        continue
+    E.append(cluster["entropy"])
+    FV = cluster["feature"]
+    center = torch.mean(FV, dim=0)
+    center = center.repeat(FV.shape[0], 1)
+    de = FV - center
+    ve = torch.linalg.matrix_norm(de, ord="fro") ** 2 / (FV.shape[0] - 1)
 
-  F = cluster['feature']
-  norm_2 = torch.norm(F, p=2, dim=1)
-  FV = F/norm_2[:,None]
-  center = torch.mean(FV, dim = 0)
-  norm_2 = torch.linalg.vector_norm(center, ord=2)
-  center = center / norm_2
-  d = 1 - torch.mm(FV,center.view(-1,1))
-  vc = torch.linalg.matrix_norm(d, ord = 'fro')**2 / (FV.shape[0]-1)
+    F = cluster["feature"]
+    norm_2 = torch.norm(F, p=2, dim=1)
+    FV = F / norm_2[:, None]
+    center = torch.mean(FV, dim=0)
+    norm_2 = torch.linalg.vector_norm(center, ord=2)
+    center = center / norm_2
+    d = 1 - torch.mm(FV, center.view(-1, 1))
+    vc = torch.linalg.matrix_norm(d, ord="fro") ** 2 / (FV.shape[0] - 1)
 
-  
-  VE.append(ve.item())
-  VC.append(vc.item())
+    VE.append(ve.item())
+    VC.append(vc.item())
 
 fig, ax = plt.subplots()
-#im = ax.scatter(VE, VC, marker='.', c = E, cmap = "RdYlGn_r", vmin = 0.0, vmax = max(E))
-im = ax.scatter(VE, VC, marker='.', c = E, cmap = "RdYlGn_r", vmin = 0.0, vmax = 0.5)
-cbar = fig.colorbar(im, ax=ax, shrink=0.95, label = "Entropy")
-ax.set_ylabel('Variance from Center Cosine')
-ax.set_xlabel('Variance from Center Eucleadin')
-plt.savefig(fname ='variance_and_vaiance.png', dpi=300, bbox_inches='tight')
+# im = ax.scatter(VE, VC, marker='.', c = E, cmap = "RdYlGn_r", vmin = 0.0, vmax = max(E))
+im = ax.scatter(VE, VC, marker=".", c=E, cmap="RdYlGn_r", vmin=0.0, vmax=0.5)
+cbar = fig.colorbar(im, ax=ax, shrink=0.95, label="Entropy")
+ax.set_ylabel("Variance from Center Cosine")
+ax.set_xlabel("Variance from Center Eucleadin")
+plt.savefig(fname="variance_and_vaiance.png", dpi=300, bbox_inches="tight")

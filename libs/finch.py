@@ -10,14 +10,14 @@ try:
 
     pyflann_available = True
 except Exception as e:
-    warnings.warn('pyflann not installed: {}'.format(e))
+    warnings.warn("pyflann not installed: {}".format(e))
     pyflann_available = False
     pass
 
 RUN_FLANN = 70000
 
 
-def clust_rank(mat, initial_rank=None, distance='cosine'):
+def clust_rank(mat, initial_rank=None, distance="cosine"):
     s = mat.shape[0]
     if initial_rank is not None:
         orig_dist = []
@@ -28,16 +28,16 @@ def clust_rank(mat, initial_rank=None, distance='cosine'):
     else:
         if not pyflann_available:
             raise MemoryError("You should use pyflann for inputs larger than {} samples.".format(RUN_FLANN))
-        print('Using flann to compute 1st-neighbours at this step ...')
+        print("Using flann to compute 1st-neighbours at this step ...")
         flann = FLANN()
         result, dists = flann.nn(mat, mat, num_neighbors=2, algorithm="kdtree", trees=8, checks=128)
         initial_rank = result[:, 1]
         orig_dist = []
-        print('Step flann done ...')
+        print("Step flann done ...")
 
     # The Clustering Equation
     A = sp.csr_matrix((np.ones_like(initial_rank, dtype=np.float32), (np.arange(0, s), initial_rank)), shape=(s, s))
-    A = A + sp.eye(s, dtype=np.float32, format='csr')
+    A = A + sp.eye(s, dtype=np.float32, format="csr")
     A = A @ A.T
 
     A = A.tolil()
@@ -49,7 +49,7 @@ def get_clust(a, orig_dist, min_sim=None):
     if min_sim is not None:
         a[np.where((orig_dist * a.toarray()) > min_sim)] = 0
 
-    num_clust, u = sp.csgraph.connected_components(csgraph=a, directed=True, connection='weak', return_labels=True)
+    num_clust, u = sp.csgraph.connected_components(csgraph=a, directed=True, connection="weak", return_labels=True)
     return u, num_clust
 
 
@@ -103,8 +103,8 @@ def req_numclust(c, data, req_clust, distance):
     return c_
 
 
-def FINCH(data, initial_rank=None, req_clust=None, distance='cosine', verbose=True):
-    """ FINCH clustering algorithm.
+def FINCH(data, initial_rank=None, req_clust=None, distance="cosine", verbose=True):
+    """FINCH clustering algorithm.
     :param data: Input matrix with features in rows.
     :param initial_rank: Nx1 first integer neighbor indices (optional).
     :param req_clust: Set output number of clusters (optional). Not recommended.
@@ -134,7 +134,7 @@ def FINCH(data, initial_rank=None, req_clust=None, distance='cosine', verbose=Tr
     c, mat = get_merge([], group, data)
 
     if verbose:
-        print('Partition 0: {} clusters'.format(num_clust))
+        print("Partition 0: {} clusters".format(num_clust))
     if len(orig_dist) != 0:
         min_sim = np.max(orig_dist * adj.toarray())
 
@@ -158,7 +158,7 @@ def FINCH(data, initial_rank=None, req_clust=None, distance='cosine', verbose=Tr
             break
 
         if verbose:
-            print('Partition {}: {} clusters'.format(k, num_clust[k]))
+            print("Partition {}: {} clusters".format(k, num_clust[k]))
         k += 1
 
     if req_clust is not None:
@@ -175,24 +175,24 @@ def FINCH(data, initial_rank=None, req_clust=None, distance='cosine', verbose=Tr
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data-path', required=True, help='Specify the path to your data csv file.')
-    parser.add_argument('--output-path', default=None, help='Specify the folder to write back the results.')
+    parser.add_argument("--data-path", required=True, help="Specify the path to your data csv file.")
+    parser.add_argument("--output-path", default=None, help="Specify the folder to write back the results.")
     args = parser.parse_args()
     data = np.genfromtxt(args.data_path, delimiter=",").astype(np.float32)
     start = time.time()
-    c, num_clust, req_c = FINCH(data, initial_rank=None, req_clust=None, distance='cosine', verbose=True)
-    print('Time Elapsed: {:2.2f} seconds'.format(time.time() - start))
+    c, num_clust, req_c = FINCH(data, initial_rank=None, req_clust=None, distance="cosine", verbose=True)
+    print("Time Elapsed: {:2.2f} seconds".format(time.time() - start))
 
     # Write back
     if args.output_path is not None:
-        print('Writing back the results on the provided path ...')
-        np.savetxt(args.output_path + '/c.csv', c, delimiter=',', fmt='%d')
-        np.savetxt(args.output_path + '/num_clust.csv', np.array(num_clust), delimiter=',', fmt='%d')
+        print("Writing back the results on the provided path ...")
+        np.savetxt(args.output_path + "/c.csv", c, delimiter=",", fmt="%d")
+        np.savetxt(args.output_path + "/num_clust.csv", np.array(num_clust), delimiter=",", fmt="%d")
         if req_c is not None:
-            np.savetxt(args.output_path + '/req_c.csv', req_c, delimiter=',', fmt='%d')
+            np.savetxt(args.output_path + "/req_c.csv", req_c, delimiter=",", fmt="%d")
     else:
-        print('Results are not written back as the --output-path was not provided')
+        print("Results are not written back as the --output-path was not provided")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
